@@ -1,0 +1,15 @@
+.venv/
+.state/
+.state-compact/
+.ui/
+.experiments/
+outputs/
+release/
+build/
+dist/
+*.egg-info/
+.env
+.env.*
+.pytest_cache/
+__pycache__/
+*.pyc

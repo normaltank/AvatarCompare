@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>头像比对 · 本机工具</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+<header class="app-header">
+  <a class="brand" href="/" aria-label="头像比对首页"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="6" width="18" height="20" rx="3"/><rect x="11" y="3" width="18" height="20" rx="3"/><circle cx="20" cy="10" r="2"/><path d="m14 20 5-5 3 3 4-4"/></svg><span>头像比对</span></a>
+  <span class="local-note"><span class="status-dot"></span>本机运行 · 目标不外传</span>
+  <button class="text-button" id="quit" type="button">退出工具</button>
+</header>
+<main class="app-shell">
+  <nav class="page-nav" aria-label="工作区">
+    <button type="button" id="tab-work" class="nav-button active" aria-pressed="true">开始比对</button>
+    <button type="button" id="tab-history" class="nav-button" aria-pressed="false">扫描记录</button>
+    <span id="hardware" class="hardware"></span>
+  </nav>
+  <div id="connection" class="banner error" role="status" hidden></div>
+  <div id="notice" class="banner" role="status" hidden></div>
+  <section id="work-page" class="workspace" aria-label="比对工作区">
+    <aside class="setup-panel">
+      <form id="scan-form">
+        <div class="panel-heading"><h1>新建比对</h1><span>选择图片，划定范围</span></div>
+        <fieldset class="input-fields" id="input-fields">
+          <div class="field-group">
+            <label class="field-title" for="target-file">目标图片</label>
+            <div class="target-picker" id="drop-zone">
+              <div id="target-empty"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="4" width="24" height="24" rx="3"/><circle cx="12" cy="12" r="2"/><path d="m6 24 8-8 5 5 4-4 3 3"/></svg><p>拖入一张图片</p><span>或点击下方选择</span></div>
+              <img id="target-preview" alt="当前目标图片" hidden>
+              <label class="file-button" for="target-file">选择目标图片</label>
+              <input type="file" id="target-file" accept="image/*" class="file-input">
+            </div>
+            <p id="target-name" class="field-help">JPG、PNG、WebP 等，最大 32 MiB</p>
+          </div>
+          <div class="field-group">
+            <label for="mode" class="field-title">候选来源</label>
+            <select id="mode"><option value="range">编号范围 · 在线获取头像</option><option value="local">本地图片文件夹</option></select>
+          </div>
+          <div id="range-fields" class="field-group">
+            <div class="range-inputs">
+              <div><label for="start">起始编号</label><input id="start" inputmode="numeric" pattern="[0-9]+" autocomplete="off" placeholder="例如 10001" required></div>
+              <span class="range-divider" aria-hidden="true">—</span>
+              <div><label for="end">结束编号</label><input id="end" inputmode="numeric" pattern="[0-9]+" autocomplete="off" placeholder="例如 20000" required></div>
+            </div>
+            <p class="field-help" id="range-count">包含起止编号两端</p>
+          </div>
+          <div id="folder-fields" class="field-group" hidden>
+            <button type="button" id="choose-original" class="secondary wide">选择原始目标文件</button>
+            <p class="field-help">本地模式需选择原文件，以便跳过目标自身。</p>
+            <button type="button" id="choose-folder" class="secondary wide">选择候选文件夹</button>
+            <p class="field-help" id="folder-name">会读取文件夹中的图片及子文件夹</p>
+          </div>
+          <div id="range-settings">
+            <div class="switches">
+              <label class="check-row"><input type="checkbox" id="full-speed" checked><span><strong>全速运行</strong><small>下载不设固定等待，遇限速自动退避</small></span></label>
+              <label class="check-row"><input type="checkbox" id="compact" checked><span><strong>省空间</strong><small>保留候选与证据，清理未命中头像</small></span></label>
+            </div>
+            <p id="retention-help" class="field-help retention-help">已处理区间和错误始终保存；另保留前 100 项供复核。换目标可能需要重新下载。</p>
+            <details class="advanced" id="advanced">
+              <summary>计算与网络设置</summary>
+              <label for="speed">计算资源</label>
+              <select id="speed"><option value="efficient">高效默认</option><option value="maximum">全部 CPU</option><option value="custom">自定义并发</option></select>
+              <p class="field-help" id="speed-help">并行下载、计算及写入；重复头像自动复用计算。</p>
+              <div id="custom-speed" hidden>
+                <div class="two-fields"><div><label for="workers">计算并行数</label><input type="number" id="workers" min="1" max="256" value="8"></div><div><label for="downloads">下载并行数</label><input type="number" id="downloads" min="1" max="256" value="128"></div></div>
+                <label for="backend">计算方式</label><select id="backend"><option value="thread">线程</option><option value="process">进程</option></select>
+              </div>
+              <div class="two-fields"><div><label for="rate">每秒请求上限</label><input type="number" id="rate" min="0" max="100" step="0.1" value="0"></div><div><label for="timeout">超时（秒）</label><input type="number" id="timeout" min="0.1" max="120" step="0.1" value="10"></div></div>
+              <p class="field-help">0 表示全速，不代表接口承诺的额度。</p>
+              <label for="retries">失败后重试次数</label><input type="number" id="retries" min="0" max="5" value="2">
+              <label class="check-row compact-row"><input type="checkbox" id="retry-errors"><span>重新尝试已记录的失败项</span></label>
+              <details class="source-details"><summary>接口与缓存批次</summary>
+                <label for="endpoint">图片接口模板</label><input id="endpoint" type="url" value="https://q1.qlogo.cn/g?b=qq&amp;nk={id}&amp;s=100">
+                <p class="field-help">每个编号替换一次 {id}，接口直接返回图片。</p>
+                <label for="revision">缓存批次（可留空）</label><input id="revision" placeholder="自动管理并复用">
+                <label for="token-env">令牌环境变量名（可留空）</label><input id="token-env" autocomplete="off" placeholder="仅填写变量名">
+                <label class="check-row compact-row"><input type="checkbox" id="refresh"><span>创建新批次，重新获取整个范围</span></label>
+              </details>
+            </details>
+          </div>
+        </fieldset>
+        <p id="form-error" class="inline-error" role="alert" hidden></p>
+        <button type="submit" id="start-button" class="primary wide"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7z"/></svg><span>开始比对</span></button>
+        <p class="start-help">相同目标与批次会自动跳过已处理编号</p>
+      </form>
+    </aside>
+    <div class="main-panel">
+      <section class="progress-panel" aria-labelledby="task-heading">
+        <div class="section-heading"><h2 id="task-heading">等待开始</h2><span id="task-status" class="badge neutral">就绪</span></div>
+        <p id="task-description" class="muted">全速与省空间已同时开启。选择目标并填写范围后，即可开始。</p>
+        <div id="progress-content" hidden>
+          <div class="progress-top"><strong id="progress-count">0 / 0</strong><span id="progress-percent">0%</span></div>
+          <progress id="progress-bar" value="0" max="100" aria-label="已处理进度"></progress>
+          <dl class="statistics"><div><dt>当前速度</dt><dd id="stat-speed">—</dd></div><div><dt>预计剩余</dt><dd id="stat-eta">—</dd></div><div><dt>复用记录</dt><dd id="stat-resumed">0</dd></div><div><dt>失败</dt><dd id="stat-errors">0</dd></div></dl>
+          <div class="task-actions"><button type="button" id="stop-button" class="danger" hidden>停止并保存</button><button type="button" id="continue-button" class="primary" hidden>继续此任务</button><a id="report-link" class="secondary button-link" target="_blank" rel="noopener" hidden>查看对照报告</a><button type="button" id="output-button" class="text-button" hidden>打开报告目录</button></div>
+        </div>
+        <p id="task-message" class="task-message" role="status" hidden></p>
+        <button type="button" id="open-export" class="secondary" hidden>打开导出目录</button>
+      </section>
+      <section class="results-panel" aria-labelledby="results-heading">
+        <div class="section-heading results-heading"><h2 id="results-heading">候选结果</h2><span id="result-count" class="muted">比较完成后显示</span></div>
+        <div id="results-empty" class="empty-state"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="7" y="14" width="28" height="34" rx="4"/><rect x="29" y="8" width="28" height="34" rx="4"/><path d="m13 40 8-9 6 6m8-4 7-9 9 10"/><circle cx="43" cy="18" r="3"/></svg><h3>让图片和证据一起说话</h3><p>这里会显示候选编号、对应头像和比较依据。<br>结构相似、哈希与局部细节分别呈现。</p><button type="button" id="demo-button" class="secondary">先试一次本机模拟</button><small>仅使用生成的测试图片，不访问真实头像接口</small></div>
+        <ol id="results-list" class="results-list"></ol>
+        <p class="results-footnote" id="results-note" hidden>这里展示前 20 项。局部位置关系仍属实验性证据；请结合原图人工核对。头像相同不表示账号持有人相同。</p>
+      </section>
+    </div>
+  </section>
+  <section id="history-page" class="history-panel" aria-labelledby="history-heading" hidden>
+    <div class="section-heading"><div><h1 id="history-heading">扫描记录</h1><p class="muted">恢复原任务、核对已处理范围，或导出保留的证据与错误。</p></div><button id="refresh-history" type="button" class="secondary">刷新记录</button></div>
+    <p class="field-help">“已处理”包含失败；成功区间与失败编号分别记录。省空间模式无法导出已清理的未命中头像。</p>
+    <div id="history-list" class="history-list"><p class="loading">正在读取任务记录…</p></div>
+  </section>
+  <footer class="app-footer"><span>图片同源比对，不将分数解释为身份概率</span><span id="version"></span></footer>
+</main>
+<div id="quit-confirm" class="quit-confirm" hidden><p>退出会先停止任务并保存进度。再次双击“启动”即可回来。</p><div><button type="button" id="quit-cancel" class="secondary">继续使用</button><button type="button" id="quit-confirm-button" class="danger">保存并退出</button></div></div>
+</body>
+</html>
