@@ -1,0 +1,30 @@
+name: Tests
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Windows / Python 3.12
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+      - name: Test with synthetic data and loopback HTTP
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.github/ci
+        run: .\.venv\Scripts\python.exe -m unittest discover -s tests -v
