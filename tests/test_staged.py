@@ -124,6 +124,25 @@ class StagedTests(unittest.TestCase):
             self.assertEqual(second['stats']['resumed'],first['stats']['processed'])
             self.assertEqual(second['stats']['requests'],0)
 
+    def test_cold_source_skips_item_lookups_and_partial_cache_still_reuses_images(self):
+        from avatar_compare.pipeline_io import cached_packet
+
+        with MockServer(self.images) as server, patch('avatar_compare.pipeline_io.cached_packet', wraps=cached_packet) as lookup:
+            first = self.run_staged(server, end=1004)
+            self.assertEqual(first['stats']['requests'], 4)
+            lookup.assert_not_called()
+
+            self.target.write_bytes(self.images[1015])
+            second = self.run_staged(server, end=1006)
+            self.assertEqual(second['stats']['download_cache_hits'], 4)
+            self.assertEqual(second['stats']['requests'], 2)
+            self.assertEqual(lookup.call_count, 6)
+
+            new_revision = SourceConfig(server.url, 'next-revision', rate=0, keep_alive=True)
+            third = self.run_staged(server, end=1002, config=new_revision)
+            self.assertEqual(third['stats']['requests'], 2)
+            self.assertEqual(lookup.call_count, 6)
+
     def test_stop_on_429_and_explicit_retry(self):
         with MockServer(self.images,faults={1001:[429,200]}) as server:
             first=self.run_staged(server)

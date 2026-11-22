@@ -18,9 +18,8 @@ from concurrent.futures.process import BrokenProcessPool
 
 from .engine import Store, COMPARE_VERSION
 from .ledger import RangeLedger, consistent
-from .pipeline_io import ByteBudget, ThreadTransfers
+from .pipeline_io import BudgetedSource, ByteBudget, ThreadTransfers
 from .range_engine import range_rank_key, validate_range
-from .source import HttpSource
 from .storage_profile import require_profile,range_specs_schema,save_range_spec
 
 
@@ -76,9 +75,8 @@ def search_staged(target, start, end, state_dir, config, *, workers=2, download_
         if share_computations:
             from .shared_work import SharedComparisons
             sharing = SharedComparisons(lambda query,data:store.prepare_bytes(query,data,retain_replay=compact))
-        identity = HttpSource(config)
-        source_key = identity.key
-        identity.close()
+        source = BudgetedSource(config, budget, cancel)
+        source_key = source.key
         run_id = hashlib.sha256(json.dumps(['range-compact-v1' if compact else 'range-v3-staged',COMPARE_VERSION,query.digest,source_key,start,end]).encode()).hexdigest()[:24]
         ledger = CompactLedger(db,store.writer,run_id,query.digest,source_key,COMPARE_VERSION,start,end) if compact else None
         with db:
@@ -112,7 +110,7 @@ def search_staged(target, start, end, state_dir, config, *, workers=2, download_
                 'requests':transfers.requests if transfers else 0,'buffer_reserved_bytes':budget.used})
 
         if stats['processed'] < stats['total'] and not cancel.is_set():
-            transfers = ThreadTransfers(config,downloads,store,budget,cancel)
+            transfers = ThreadTransfers(source, downloads, store)
             cpu = ThreadPoolExecutor(max_workers=workers,thread_name_prefix='avatar-compute')
             if compute_backend == 'process':
                 from .parallel import extract_in_process, initialize_cpu

@@ -125,23 +125,30 @@ class BudgetedSource(HttpSource):
 
 
 class ThreadTransfers:
-    def __init__(self, config, workers, store, budget, cancel):
-        self.source = BudgetedSource(config,budget,cancel)
-        self.store, self.budget, self.cancel = store,budget,cancel
+    def __init__(self, source, workers, store):
+        self.source = source
+        self.store, self.budget, self.cancel = store, source.budget, source.cancel
+        # The staged scan schedules each identifier once under the cache lease.
+        self.has_prior_acquisitions = store.db().execute(
+            'SELECT 1 FROM acquisitions WHERE source=? LIMIT 1', (source.key,)
+        ).fetchone() is not None
         self.pool = ThreadPoolExecutor(max_workers=workers,thread_name_prefix='avatar-download')
 
     def submit(self, identifier):
         return self.pool.submit(self.work,identifier)
 
     def work(self, identifier):
-        try:
-            cached = cached_packet(self.store,self.source.key,identifier,self.budget,self.cancel,self.source.config.max_bytes)
-        except FetchFailure as error:
-            if error.code != 'cancelled':
-                raise
-            return Packet(identifier,None,self.source.metadata([],__import__('time').perf_counter(),None,'cancelled'),None)
-        if cached:
-            return cached
+        if self.has_prior_acquisitions:
+            try:
+                cached = cached_packet(
+                    self.store, self.source.key, identifier, self.budget, self.cancel, self.source.config.max_bytes
+                )
+            except FetchFailure as error:
+                if error.code != 'cancelled':
+                    raise
+                return Packet(identifier,None,self.source.metadata([],__import__('time').perf_counter(),None,'cancelled'),None)
+            if cached:
+                return cached
         self.source.local.lease = None
         data, metadata = self.source.fetch(identifier,self.cancel)
         lease = self.source.local.lease

@@ -100,6 +100,43 @@ class RangeIntegrationTests(unittest.TestCase):
             self.assertEqual(second['stats']['requests'], 1)
             self.assertTrue(second['results'][0]['metrics']['exact_file'])
 
+    def test_missing_images_preserve_the_keepalive_connection(self):
+        from avatar_compare.source import HttpSource
+
+        with MockServer(self.images, faults={1018: [410]}) as server:
+            source = HttpSource(SourceConfig(server.url, 'fixture-v1', rate=0, retries=0, keep_alive=True))
+            try:
+                cancel = threading.Event()
+                for identifier, status in [(1001, 200), (1017, 404), (1018, 410), (1002, 200)]:
+                    image, metadata = source.fetch(identifier, cancel)
+                    self.assertEqual(metadata['http_status'], status)
+                    self.assertEqual(image, self.images.get(identifier))
+                    self.assertEqual(metadata['attempts'], 1)
+                self.assertEqual(len(server.client_ports), 1)
+            finally:
+                source.close()
+
+    def test_ambiguous_or_oversized_missing_responses_do_not_reuse_connection(self):
+        from http.client import HTTPMessage
+        from types import SimpleNamespace
+        from avatar_compare.source import HttpSource
+
+        source = HttpSource(SourceConfig('http://127.0.0.1:1/{id}', 'framing', keep_alive=True, max_bytes=1))
+        examples = [
+            ([('Content-Length', '+0')], 0),
+            ([('Content-Length', '0_0')], 0),
+            ([('Content-Length', '0'), ('Transfer-Encoding', ''), ('Transfer-Encoding', 'chunked')], 0),
+            ([('Content-Length', '0'), ('Content-Length', '0')], 0),
+            ([('Content-Length', '2')], 2),
+        ]
+        for fields, length in examples:
+            with self.subTest(fields=fields):
+                headers = HTTPMessage()
+                for name, value in fields:
+                    headers[name] = value
+                response = SimpleNamespace(length=length, will_close=False, headers=headers)
+                self.assertFalse(source._drain_missing_body(SimpleNamespace(sock=object()), response))
+
     def test_no_redirect_and_size_limit(self):
         with MockServer(self.images, faults={1002: [302]}) as server:
             result = self.run_range(server, end=1002, config=SourceConfig(server.url, 'v1', rate=100, max_bytes=100))
@@ -123,6 +160,33 @@ class RangeIntegrationTests(unittest.TestCase):
                 self.assertNotIn(server.url, json.dumps(authorized))
             finally:
                 os.environ.pop('AVATAR_TEST_TOKEN', None)
+
+    def test_paced_requests_avoid_coarse_wakeup_for_short_intervals(self):
+        from unittest.mock import patch
+        from avatar_compare.source import HttpSource
+
+        source = HttpSource(SourceConfig('http://127.0.0.1:1/{id}', 'clock', rate=100, keep_alive=True))
+        cancel = threading.Event()
+        now = 1.0
+
+        def sleep(seconds):
+            nonlocal now
+            now += seconds
+
+        # A coarse event wait overshoots short intervals on Windows.
+        with (
+            patch('avatar_compare.source.time.monotonic', side_effect=lambda: now),
+            patch('avatar_compare.source.time.perf_counter', side_effect=lambda: now),
+            patch('avatar_compare.source.time.sleep', side_effect=sleep),
+            patch.object(cancel, 'wait', side_effect=lambda delay: sleep(delay + .015625)),
+        ):
+            initial = source.acquire(cancel)
+            second = source.acquire(cancel)
+            sleep(.1)
+            delayed = source.acquire(cancel)
+            following = source.acquire(cancel)
+        self.assertAlmostEqual(second - initial, .01)
+        self.assertAlmostEqual(following - delayed, .01)
 
     def test_rate_limit_includes_retries_and_bounds_requests(self):
         from unittest.mock import patch

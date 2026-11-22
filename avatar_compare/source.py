@@ -100,16 +100,16 @@ class HttpSource:
         self.active = self.peak_active = 0
         self.connections = {}
         self.ssl_context = None
-        if urlsplit(config.endpoint).scheme == 'https':
+        if config.keep_alive and urlsplit(config.endpoint).scheme == 'https':
             self.ssl_context = ssl.create_default_context()
             self.ssl_context.set_alpn_protocols(['http/1.1'])
-        # Direct access avoids environment proxies leaking a local mock request.
-        self.opener = build_opener(ProxyHandler({}), NoRedirect())
+        # Keep direct access in both paths. Only the nonpersistent path uses urllib.
+        self.opener = None if config.keep_alive else build_opener(ProxyHandler({}), NoRedirect())
 
     def acquire(self, cancel: threading.Event):
         while not cancel.is_set():
             with self.lock:
-                now = time.monotonic()
+                now = time.perf_counter()
                 delay = self.next_request-now
                 if delay <= 0:
                     self.next_request = now+1/self.config.rate if self.config.rate else now
@@ -117,7 +117,11 @@ class HttpSource:
                     self.active += 1
                     self.peak_active = max(self.peak_active, self.active)
                     return now
-            cancel.wait(min(delay, 0.1))
+            # Windows event waits can round short delays up by a scheduler tick.
+            if delay <= 0.04:
+                time.sleep(delay)
+            else:
+                cancel.wait(min(delay - 0.02, 0.1))
         raise FetchFailure('cancelled')
 
     @contextmanager
@@ -136,20 +140,48 @@ class HttpSource:
             with self.lock:
                 self.connections[identity] = connection
         response = None
+        reusable = False
         try:
             connection.request('GET', (url.path or '/')+('?' + url.query if url.query else ''), headers=dict(request.header_items()))
             response = connection.getresponse()
             if response.status >= 300:
+                reusable = response.status in {404, 410} and self._drain_missing_body(connection, response)
                 raise HTTPError('', response.status, '', response.headers, None)
             yield response
         except BaseException:
-            connection.close()
-            with self.lock:
-                self.connections.pop(identity, None)
+            if not reusable:
+                connection.close()
+                with self.lock:
+                    self.connections.pop(identity, None)
             raise
         finally:
             if response is not None:
                 response.close()
+
+    def _drain_missing_body(self, connection, response):
+        sock = connection.sock
+        lengths = response.headers.get_all('Content-Length', [])
+        if (sock is None or response.will_close or response.headers.get_all('Transfer-Encoding')
+                or len(lengths) != 1):
+            return False
+        advertised = lengths[0].strip(' \t')
+        if not advertised.isascii() or not advertised.isdecimal() or len(advertised) > 4:
+            return False
+        length = int(advertised)
+        if length != response.length or length > min(4096, self.config.max_bytes):
+            return False
+        # Read only a small, framed body. Drop the connection if one short read
+        # cannot consume it, so slow or truncated error bodies cannot hold up the scan.
+        if not length:
+            return True
+        timeout = sock.gettimeout()
+        sock.settimeout(min(timeout, 0.05))
+        try:
+            return len(response.read1(length)) == length
+        except (OSError, HTTPException):
+            return False
+        finally:
+            sock.settimeout(timeout)
 
     def close(self):
         for connection in self.connections.values():
@@ -214,7 +246,7 @@ class HttpSource:
                     # Enforce cooldown for other workers even after this item's
                     # final attempt. A long server wait stops the run for resume.
                     with self.lock:
-                        self.next_request = max(self.next_request, time.monotonic()+max(0.25, retry_after))
+                        self.next_request = max(self.next_request, time.perf_counter()+max(0.25, retry_after))
                     if retry_after > 120:
                         cancel.set()
             except (URLError, TimeoutError, ConnectionError, OSError, HTTPException):
@@ -231,7 +263,7 @@ class HttpSource:
                 return None, self.metadata(events, started, failure.status, failure.code)
             delay = max(retry_after, min(0.25*2**(attempt-1), 4.0))
             with self.lock:
-                self.next_request = max(self.next_request, time.monotonic()+delay)
+                self.next_request = max(self.next_request, time.perf_counter()+delay)
             cancel.wait(delay)
         raise AssertionError('unreachable')
 
