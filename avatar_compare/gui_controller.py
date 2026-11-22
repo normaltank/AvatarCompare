@@ -51,6 +51,7 @@ class Controller:
         self.sources = read_json(self.ui_dir / 'sources.json')
         self.current = {'status': 'idle', 'stats': {}, 'results': [], 'message': ''}
         self.cancel = threading.Event()
+        self.live_preview_state = None
         self.worker = None
         self.opener = opener or self._open_local
         self.folders = {}
@@ -210,6 +211,7 @@ class Controller:
                 raise ValueError('已有操作正在运行；请完成或停止后再开始')
             self.cancel = threading.Event()
             if status in {'running', 'demo'}:
+                self.live_preview_state = None
                 self.current = {'status': status, 'stats': {}, 'results': [], 'message': '', 'params': params or {}}
             else:
                 self.current.update(status=status, message='')
@@ -245,6 +247,20 @@ class Controller:
         compact = params['retention'] == 'compact'
         state = state or self.root / ('.state-compact' if compact else '.state')
         output = output or self.root / 'outputs'
+        group = 'compact' if compact else 'all'
+        if state not in [self.root / '.state-compact', self.root / '.state']:
+            group = 'demo'
+
+        key_prefix = group + ':'
+
+        def labeled_candidates(rows):
+            return [{**row, 'label': evidence_label(row)} for row in rows]
+
+        def publish_candidates(run_id, rows):
+            with self.guard:
+                self.live_preview_state = state
+                self.current.update(preview_key=key_prefix + run_id, results=labeled_candidates(rows))
+
         with CacheLease(state):
             require_profile(state, compact=compact)
             if params['mode'] == 'local':
@@ -265,22 +281,22 @@ class Controller:
                 result = search_staged(Path(params['target']), int(params['start']), int(params['end']), state, config,
                                        workers=params['workers'], download_workers=params['downloads'],
                                        compute_backend=params['backend'], share_computations=True, compact=compact,
-                                       cancel=self.cancel, progress=self._progress, retry_errors=params['retry_errors'], top_limit=20)
+                                       cancel=self.cancel, progress=self._progress, retry_errors=params['retry_errors'],
+                                       top_limit=20, on_top_matches=publish_candidates)
             with self.guard:
                 self.current.update(status='saving', message='正在生成候选对照报告…')
             reports = write_reports(result, output, limit=20)
-        group = 'compact' if compact else 'all'
-        if state not in [self.root / '.state-compact', self.root / '.state']:
-            group = 'demo'
-        key = group + ':' + result['run_id']
+        key = key_prefix + result['run_id']
         with self.guard:
             self.jobs[key] = {'params': deepcopy(params), 'state_dir': str(state),
                               'reports': {kind: str(path) for kind, path in reports.items()}}
             # A new explicit run reuses its exact epoch, rather than refreshing again.
             self.jobs[key]['params']['refresh'] = False
             save_json(self.ui_dir / 'jobs.json', self.jobs)
+            self.live_preview_state = None
+            self.current.pop('preview_key', None)
             self.current.update(status=result['status'], stats=result['stats'], job_key=key,
-                                params=deepcopy(params), results=[{**row, 'label': evidence_label(row)} for row in result['results'][:20]],
+                                params=deepcopy(params), results=labeled_candidates(result['results'][:20]),
                                 message='已停止，进度已保存。可继续此任务。' if result['status'] == 'stopped' else f"比较完成，{result['stats']['errors']} 个编号/文件未成功，可从扫描记录重试。" if result['stats']['errors'] else '比较完成。候选及错误记录已保存。')
 
     def history(self):
@@ -375,9 +391,10 @@ class Controller:
         if len(digest) != 64 or any(value not in '0123456789abcdef' for value in digest):
             raise ValueError('无效图片摘要')
         with self.guard:
-            if key != self.current.get('job_key') or digest not in {row.get('digest') for row in self.current.get('results', [])}:
+            preview_key = self.current.get('preview_key', self.current.get('job_key'))
+            if key != preview_key or digest not in {row.get('digest') for row in self.current.get('results', [])}:
                 raise ValueError('图片不在当前展示结果中')
-            state = Path(self.jobs[key]['state_dir'])
+            state = self.live_preview_state or Path(self.jobs[key]['state_dir'])
         # Read-only: do not acquire Store's writer lease during an active scan.
         from .engine import STORAGE_VERSION, FEATURE_VERSION, unpack
         with closing(sqlite3.connect((state / 'cache.sqlite3').as_uri() + '?mode=ro', uri=True)) as db:

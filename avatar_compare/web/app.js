@@ -110,19 +110,22 @@ async function begin() {
   } catch (error) { formError(error.message); $('start-button').disabled = busy; }
 }
 function renderResults(state) {
-  $('result-count').textContent = state.results?.length ? `展示前 ${state.results.length} 项` : state.busy ? '正在比较，完成后显示' : '比较完成后显示';
-  const signature = (state.job_key || '') + ':' + state.results.map((row) => (row.identifier || row.path) + ':' + row.digest).join(',');
+  const rows = state.results || [];
+  const previewKey = state.preview_key || state.job_key || '';
+  const scanning = ['running', 'demo', 'stopping'].includes(state.status);
+  $('result-count').textContent = rows.length
+    ? `${scanning ? '扫描中 · ' : ''}展示前 ${rows.length} 项`
+    : state.busy ? '正在比较候选' : '比较完成后显示';
+  const signature = previewKey + ':' + rows.map((row) => (row.identifier || row.path) + ':' + row.digest).join(',');
   if (signature === resultSignature) return;
   resultSignature = signature;
-  const rows = state.results || [];
   $('results-list').replaceChildren();
   visible('results-empty', rows.length === 0); visible('results-note', rows.length > 0);
-  $('result-count').textContent = rows.length ? `展示前 ${rows.length} 项` : state.busy ? '正在比较，完成后显示' : '比较完成后显示';
   rows.forEach((row) => {
     const item = node('li', undefined, 'candidate');
     if (row.digest && row.metrics) {
       const image = node('img'); image.alt = '候选头像 ' + (row.identifier || ''); image.loading = 'lazy';
-      image.src = '/api/preview?job=' + encodeURIComponent(state.job_key) + '&digest=' + row.digest;
+      image.src = '/api/preview?job=' + encodeURIComponent(previewKey) + '&digest=' + row.digest;
       item.append(image);
     } else item.append(node('div', '未获取图片', 'image-fallback'));
     const body = node('div', undefined, 'candidate-main');

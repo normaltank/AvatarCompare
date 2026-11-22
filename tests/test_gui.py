@@ -56,6 +56,42 @@ class GuiTests(unittest.TestCase):
             with self.subTest(start=start, end=end), self.assertRaises(ValueError):
                 self.controller.validate(dict(target_id=self.selected['id'], start=start, end=end))
 
+    def test_live_range_candidate_has_preview_before_scan_finishes(self):
+        from avatar_compare.source import HttpSource
+
+        open_image = HttpSource.open
+        allow_second = threading.Event()
+        second_waiting = threading.Event()
+
+        def pause_second(source, request):
+            if request.full_url.endswith('/1002'):
+                second_waiting.set()
+                if not allow_second.wait(10):
+                    raise TimeoutError('second synthetic response was never released')
+            return open_image(source, request)
+
+        with MockServer(self.images) as source, patch.object(HttpSource, 'open', pause_second):
+            self.controller.start(self.values(source, speed='custom', workers=1, downloads=1) | {'end': '1002'})
+            try:
+                self.assertTrue(second_waiting.wait(5))
+                deadline = time.monotonic() + 3
+                snapshot = self.controller.snapshot()
+                while not snapshot['results'] and time.monotonic() < deadline:
+                    time.sleep(.01)
+                    snapshot = self.controller.snapshot()
+                self.assertTrue(snapshot['busy'])
+                self.assertNotIn('job_key', snapshot)
+                self.assertEqual([row['identifier'] for row in snapshot['results']], ['1001'])
+                digest = snapshot['results'][0]['digest']
+                self.assertGreater(len(self.controller.preview(snapshot['preview_key'], digest)), 100)
+            finally:
+                allow_second.set()
+            final = self.wait()
+            self.assertEqual(final['stats']['processed'], 2)
+            self.assertNotIn('preview_key', final)
+            self.assertEqual(final['job_key'], snapshot['preview_key'])
+            self.assertGreater(len(self.controller.preview(final['job_key'], digest)), 100)
+
     def test_mock_scan_history_zero_request_resume_preview_export(self):
         self.images[1018] = b'not an image'
         self.images[1019] = self.target

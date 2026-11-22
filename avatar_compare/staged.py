@@ -5,6 +5,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, wait, FIRST_COMPLETED
 from dataclasses import dataclass
 import hashlib
+from heapq import nsmallest
 import json
 import multiprocessing
 import os
@@ -16,9 +17,9 @@ import cv2
 from concurrent.futures.process import BrokenProcessPool
 
 from .engine import Store, COMPARE_VERSION
-from .ledger import RangeLedger
+from .ledger import RangeLedger, consistent
 from .pipeline_io import ByteBudget, ThreadTransfers
-from .range_engine import validate_range
+from .range_engine import range_rank_key, validate_range
 from .source import HttpSource
 from .storage_profile import require_profile,range_specs_schema,save_range_spec
 
@@ -33,7 +34,9 @@ class Prepared:
 def search_staged(target, start, end, state_dir, config, *, workers=2, download_workers=None,
                   cancel=None, progress=None, retry_errors=False, top_limit=100,
                   compute_backend='thread', buffer_bytes=256*1024*1024,
-                  worker_observer=None, share_computations=False, compact=False, **compatibility):
+                  worker_observer=None, share_computations=False, compact=False,
+                  on_top_matches=None, **compatibility):
+    """Scan a range and optionally publish the top strong matches after commit."""
     validate_range(start,end)
     downloads = workers if download_workers is None else download_workers
     if not 1 <= workers <= max(4,min(os.cpu_count() or 1,256)) or not 1 <= downloads <= 256:
@@ -94,6 +97,10 @@ def search_staged(target, start, end, state_dir, config, *, workers=2, download_
                  'buffer_limit_bytes':buffer_bytes,'query_cache':query_cache,'compute_backend':compute_backend,
                  'transport':'thread','sum_fetch_ms':0,'sum_compute_ms':0,'sum_extraction_ms':0,
                  'sum_comparison_ms':0,'pipeline':'staged'}
+        published_matches = []
+        if on_top_matches and totals['consistent']:
+            published_matches = [row for row in ledger.top(top_limit) if consistent(row)]
+            on_top_matches(run_id, published_matches)
         if totals['blocked']:
             cancel.set()
         def emit(stage):
@@ -236,6 +243,7 @@ def search_staged(target, start, end, state_dir, config, *, workers=2, download_
                     else:
                         batch,offsets = commits.pop(future)
                         counts = future.result()
+                        new_matches = []
                         for item,offset in zip(batch,offsets):
                             row = item.row
                             if counts[offset]:
@@ -248,9 +256,16 @@ def search_staged(target, start, end, state_dir, config, *, workers=2, download_
                                 for name in ['extraction_ms','comparison_ms','compute_ms']:
                                     stats['sum_'+name] += row.get(name,0)
                                 stats['sum_fetch_ms'] += row['network_ms']
+                                if on_top_matches and consistent(row):
+                                    new_matches.append(row)
                             item.packet.release()
                             if sharing and not compact and row['metrics'] and not row['error']:
                                 sharing.committed(query.digest,row['digest'])
+                        if new_matches:
+                            matches = nsmallest(top_limit, published_matches + new_matches, key=range_rank_key)
+                            if matches != published_matches:
+                                published_matches = matches
+                                on_top_matches(run_id, published_matches)
                         emit('matching')
                 if time.monotonic()-last_emit >= 0.5:
                     emit('matching');last_emit=time.monotonic()
