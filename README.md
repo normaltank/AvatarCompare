@@ -4,9 +4,11 @@
 
 [快速开始](#快速开始) · [使用指南](docs/usage.md) · [匹配原理](docs/architecture.md) · [全部文档](docs/) · [参与贡献](CONTRIBUTING.md) · [更新记录](CHANGELOG.md)
 
+**[下载 v0.8.0 ZIP](https://github.com/normaltank/AvatarCompare/releases/download/v0.8.0/AvatarCompare_range_0.8.0.zip)** · [查看 GitHub Release](https://github.com/normaltank/AvatarCompare/releases/tag/v0.8.0)
+
 ## 快速开始
 
-1. 下载或克隆本仓库，安装 Python 3.12，并确保终端能运行 `python`。
+1. 解压下载的 ZIP 或克隆本仓库。安装 Python 3.12，并确保终端能运行 `python`。
 2. 在 Windows 上双击 [`启动.cmd`](启动.cmd)。首次启动会安装依赖，随后在浏览器打开本机界面。
 3. 点击 **先试一次本机模拟**，用合成图片体验完整流程。处理自己的图片时，在 **候选来源** 选择 **本地图片文件夹**，选好目标和文件夹后开始比对。
 
