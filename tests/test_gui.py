@@ -153,7 +153,7 @@ class GuiTests(unittest.TestCase):
         self.controller.start(dict(target_id=selected['id'], mode='local', folder_id=picked['id']))
         state = self.wait()
         self.assertEqual(state['stats']['total'], 1)
-        self.assertEqual(state['results'][0]['path'], str(folder / '副本.png'))
+        self.assertEqual(Path(state['results'][0]['path']), (folder / '副本.png').resolve())
         params = self.controller.load_job(state['job_key'])
         self.controller.start(params)
         resumed = self.wait()

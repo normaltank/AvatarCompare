@@ -26,20 +26,21 @@ class AllResourceTests(unittest.TestCase):
             target, images, _ = dataset()
             query = root/'target.png'
             query.write_bytes(target)
+            workers = min(32, max(4, os.cpu_count() or 1))
             with MockServer(images) as server:
                 result = search_range(query, 1001, 1016, root/'state',
                     SourceConfig(server.url, 'fixture', rate=0, retries=0, keep_alive=True),
-                    workers=32, download_workers=128, stream_results=True, shared_writer=True)
+                    workers=workers, download_workers=128, stream_results=True, shared_writer=True)
                 self.assertEqual(result['stats']['processed'], 16)
                 self.assertEqual(result['stats']['errors'], 0)
-                self.assertEqual(result['stats']['workers'], 32)
+                self.assertEqual(result['stats']['workers'], workers)
                 self.assertEqual(result['stats']['download_workers'], 128)
-                self.assertLessEqual(result['stats']['peak_compute'], 32)
+                self.assertLessEqual(result['stats']['peak_compute'], workers)
                 self.assertGreater(result['stats']['writer_peak_batch'], 1)
                 self.assertEqual(next(r for r in result['results'] if r['identifier']=='1001')['metrics']['exact_file'], True)
                 resumed = search_range(query, 1001, 1016, root/'state',
                     SourceConfig(server.url, 'fixture', rate=0, retries=0, keep_alive=True),
-                    workers=32, download_workers=128, stream_results=True, shared_writer=True)
+                    workers=workers, download_workers=128, stream_results=True, shared_writer=True)
                 self.assertEqual(resumed['stats']['resumed'], 16)
                 self.assertEqual(resumed['stats']['requests'], 0)
 
@@ -83,14 +84,15 @@ class AllResourceTests(unittest.TestCase):
             images.update({number: target for number in range(1017,1065)})
             query = root/'target.png'
             query.write_bytes(target)
+            workers = min(8, max(4, os.cpu_count() or 1))
             with MockServer(images) as server:
                 config = SourceConfig(server.url, 'resume', rate=0, keep_alive=True)
                 stop = threading.Event()
-                first = search_range(query, 1001, 1064, root/'state', config, workers=8, download_workers=32,
+                first = search_range(query, 1001, 1064, root/'state', config, workers=workers, download_workers=32,
                     stream_results=True, shared_writer=True, cancel=stop,
                     progress=lambda event: stop.set() if event['processed'] >= 5 else None)
                 self.assertEqual(first['status'], 'stopped')
-                second = search_range(query, 1001, 1064, root/'state', config, workers=8, download_workers=32,
+                second = search_range(query, 1001, 1064, root/'state', config, workers=workers, download_workers=32,
                     stream_results=True, shared_writer=True)
                 self.assertEqual(second['stats']['processed'], 64)
                 self.assertEqual(second['stats']['resumed'], first['stats']['processed'])
