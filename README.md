@@ -6,6 +6,10 @@
 
 **[下载 v0.8.0 ZIP](https://github.com/normaltank/AvatarCompare/releases/download/v0.8.0/AvatarCompare_range_0.8.0.zip)** · [查看 GitHub Release](https://github.com/normaltank/AvatarCompare/releases/tag/v0.8.0)
 
+![AvatarCompare 本机模拟界面，展示合成目标图、测试编号和候选结果](docs/screenshots/mock-demo.png)
+
+本机模拟演示使用合成图片和测试编号 1001–1020。
+
 ## 快速开始
 
 1. 解压下载的 ZIP 或克隆本仓库。安装 Python 3.12，并确保终端能运行 `python`。

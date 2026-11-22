@@ -11,6 +11,7 @@ def build():
     app = Path(__file__).resolve().parents[1]
     files = [path for name in ['avatar_compare', 'tests', 'experiments'] for path in (app/name).glob('*.py')]
     files += list((app/'docs').glob('*.md'))
+    files += list((app/'docs'/'screenshots').glob('*.png'))
     files += [path for path in (app/'avatar_compare'/'web').iterdir() if path.suffix in {'.html', '.css', '.js'}]
     files += [app/name for name in [
         'README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'DESIGN.md', 'LICENSE',
