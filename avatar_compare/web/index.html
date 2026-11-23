@@ -81,6 +81,10 @@
               <details class="source-details"><summary>接口与缓存批次</summary>
                 <label for="endpoint">图片接口模板</label><input id="endpoint" type="url" value="https://q1.qlogo.cn/g?b=qq&amp;nk={id}&amp;s=100">
                 <p class="field-help">每个编号替换一次 {id}，接口直接返回图片。</p>
+                <div>
+                  <button type="button" class="text-button" data-qlogo-endpoint="https://q1.qlogo.cn/g?b=qq&amp;nk={id}&amp;s=100">使用 q1 默认入口</button>
+                  <button type="button" class="text-button" data-qlogo-endpoint="https://q3.qlogo.cn/g?b=qq&amp;nk={id}&amp;s=100">使用 q3 备用入口</button>
+                </div>
                 <label for="revision">缓存批次（可留空）</label><input id="revision" placeholder="自动管理并复用">
                 <label for="token-env">令牌环境变量名（可留空）</label><input id="token-env" autocomplete="off" placeholder="仅填写变量名">
                 <label class="check-row compact-row"><input type="checkbox" id="refresh"><span>创建新批次，重新获取整个范围</span></label>

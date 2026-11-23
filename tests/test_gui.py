@@ -228,6 +228,40 @@ class GuiTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.controller.load_job(state['job_key'])
 
+    def test_qlogo_routes_restore_their_own_source_and_batch(self):
+        from avatar_compare.source import HttpSource, QLOGO_ENDPOINT
+
+        alternate = QLOGO_ENDPOINT.replace('q1.qlogo.cn', 'q3.qlogo.cn')
+        endpoints = []
+        expected = {}
+
+        def fixture(source, identifier, cancel):
+            endpoints.append(source.config.endpoint)
+            return self.images[identifier], source.metadata(
+                [{'attempt': 1, 'status': 200, 'code': 'ok', 'time': time.time()}],
+                time.perf_counter(), 200, None,
+            )
+
+        with patch.object(HttpSource, 'fetch', autospec=True, side_effect=fixture):
+            for endpoint in (QLOGO_ENDPOINT, alternate):
+                self.controller.start(dict(target_id=self.selected['id'], start='1001', end='1001',
+                                           endpoint=endpoint, revision='same-label'))
+                finished = self.wait()
+                self.assertEqual(finished['stats']['resumed'], 0)
+                expected[finished['job_key']] = endpoint
+            self.controller.jobs = {}
+            self.controller.sources = {}
+            history = self.controller.history()
+            self.assertEqual(len(history), 2)
+            for row in history:
+                self.assertTrue(row['can_resume'])
+                params = self.controller.load_job(row['key'])
+                self.assertEqual(params['revision'], 'same-label')
+                self.assertEqual(params['endpoint'], expected[row['key']])
+                self.controller.start(params)
+                self.assertEqual(self.wait()['stats']['resumed'], 1)
+        self.assertEqual(endpoints, [QLOGO_ENDPOINT, alternate])
+
     def test_configuration_survives_unexpected_failure_after_commit(self):
         from avatar_compare.staged import search_staged
         def fail_after_commit(*args, **kwargs):

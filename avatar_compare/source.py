@@ -25,6 +25,10 @@ from .cache_lock import CacheLease
 from . import __version__
 
 QLOGO_ENDPOINT = 'https://q1.qlogo.cn/g?b=qq&nk={id}&s=100'
+QLOGO_SOURCE_NAMES = {
+    QLOGO_ENDPOINT: 'QQ头像接口（用户指定）',
+    'https://q3.qlogo.cn/g?b=qq&nk={id}&s=100': 'QQ头像接口（q3）',
+}
 
 
 def cache_batch(state_dir: Path, endpoint: str, token_env=None, *, refresh=False) -> str:

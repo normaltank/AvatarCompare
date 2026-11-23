@@ -19,7 +19,7 @@ import uuid
 from PIL import Image, ImageOps
 
 from .cache_lock import CacheLease
-from .source import QLOGO_ENDPOINT, SourceConfig, cache_batch
+from .source import QLOGO_ENDPOINT, QLOGO_SOURCE_NAMES, SourceConfig, cache_batch
 
 LOG = logging.getLogger(__name__)
 MAX_UPLOAD = 32 * 1024 * 1024
@@ -196,7 +196,7 @@ class Controller:
         revision = str(values.get('revision') or '').strip()
         rate, timeout, retries = float(values.get('rate', 0)), float(values.get('timeout', 10)), int(values.get('retries', 2))
         token_env = str(values.get('token_env') or '').strip() or None
-        name = 'QQ头像接口（用户指定）' if endpoint == QLOGO_ENDPOINT else '获授权测试接口'
+        name = QLOGO_SOURCE_NAMES.get(endpoint, '获授权测试接口')
         SourceConfig(endpoint, revision or 'validation', name=name, token_env=token_env,
                      rate=rate, timeout=timeout, retries=retries, keep_alive=True)
         refresh = bool(values.get('refresh', False))
@@ -272,7 +272,7 @@ class Controller:
             else:
                 revision = params['revision'] or cache_batch(state, params['endpoint'], params['token_env'], refresh=params['refresh'])
                 params['revision'] = revision
-                name = 'QQ头像接口（用户指定）' if params['endpoint'] == QLOGO_ENDPOINT else '获授权测试接口'
+                name = QLOGO_SOURCE_NAMES.get(params['endpoint'], '获授权测试接口')
                 config = SourceConfig(params['endpoint'], revision, name=name, token_env=params['token_env'],
                                       rate=params['rate'], timeout=params['timeout'], retries=params['retries'], keep_alive=True)
                 token = os.environ.get(params['token_env'], '') if params['token_env'] else ''
@@ -360,11 +360,13 @@ class Controller:
             if not bounds or row.get('algorithm') != COMPARE_VERSION:
                 return None
             revision = row.get('source_revision')
-            expected = hashlib.sha256((QLOGO_ENDPOINT + '\0' + (revision or '') + '\0').encode()).hexdigest()
-            if expected != row.get('source_fingerprint'):
+            fingerprint = row.get('source_fingerprint')
+            endpoint = next((url for url in QLOGO_SOURCE_NAMES
+                             if hashlib.sha256((url + '\0' + (revision or '') + '\0').encode()).hexdigest() == fingerprint), None)
+            if endpoint is None:
                 return None
             params = dict(mode='range', start=str(bounds[0]), end=str(bounds[1]), retention=row['retention'],
-                          speed='efficient', endpoint=QLOGO_ENDPOINT, revision=revision, rate=0, timeout=10, retries=2,
+                          speed='efficient', endpoint=endpoint, revision=revision, rate=0, timeout=10, retries=2,
                           refresh=False, token_env=None, retry_errors=False, target=row['target'])
         if params.get('mode') == 'range':
             params['capture_source'] = bool(row.get('capture_source'))

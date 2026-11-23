@@ -70,8 +70,9 @@ function applyParams(params) {
   visible('target-preview', true); visible('target-empty', false);
   $('target-name').textContent = selectedTarget.name;
   $('mode').value = params.mode;
-  const map = {start: 'start', end: 'end', speed: 'speed', workers: 'workers', downloads: 'downloads', backend: 'backend', rate: 'rate', timeout: 'timeout', retries: 'retries', endpoint: 'endpoint', revision: 'revision', token_env: 'token-env'};
+  const map = {start: 'start', end: 'end', speed: 'speed', workers: 'workers', downloads: 'downloads', backend: 'backend', rate: 'rate', timeout: 'timeout', retries: 'retries', endpoint: 'endpoint', revision: 'revision'};
   for (const [key, id] of Object.entries(map)) if (params[key] != null) $(id).value = params[key];
+  $('token-env').value = params.token_env ?? '';
   $('compact').checked = params.retention === 'compact';
   $('capture-source').checked = Boolean(params.capture_source);
   $('full-speed').checked = Number(params.rate || 0) === 0;
@@ -168,7 +169,7 @@ function render(state) {
   $('task-status').className = 'badge' + (state.status === 'idle' ? ' neutral' : state.status === 'error' ? ' error' : '');
   $('task-heading').textContent = state.status === 'idle' ? '等待开始' : state.status === 'demo' || state.demo ? '本机模拟任务' : state.params?.target_name || '当前任务';
   const params = state.params || {};
-  if (!busy && !state.demo && state.job_key && state.job_key !== lastSyncedJob && selectedTarget?.id === params.target_id) {
+  if (!busy && !state.demo && state.job_key && state.job_key !== lastSyncedJob && selectedTarget?.id === params.target_id && $('endpoint').value === params.endpoint) {
     $('revision').value = params.revision || ''; $('refresh').checked = false; lastSyncedJob = state.job_key;
   }
   if (params.start) $('task-description').textContent = `${params.start} — ${params.end} · ${params.retention === 'compact' ? '省空间' : '完整保留'} · ${Number(params.rate) === 0 ? '全速' : '每秒最多 ' + params.rate + ' 次请求'}`;
@@ -287,6 +288,15 @@ $('drop-zone').addEventListener('drop', (event) => upload(event.dataTransfer.fil
 $('mode').addEventListener('change', updateMode);
 for (const id of ['start', 'end']) $(id).addEventListener('input', updateRange);
 for (const id of ['speed', 'compact', 'capture-source']) $(id).addEventListener('change', updateSettings);
+for (const button of document.querySelectorAll('[data-qlogo-endpoint]')) {
+  button.addEventListener('click', () => {
+    if ($('endpoint').value === button.dataset.qlogoEndpoint) return;
+    $('endpoint').value = button.dataset.qlogoEndpoint;
+    $('revision').value = $('token-env').value = '';
+    $('refresh').checked = $('retry-errors').checked = false;
+    lastSyncedJob = current.job_key || '';
+  });
+}
 $('full-speed').addEventListener('change', () => { $('rate').value = $('full-speed').checked ? '0' : '2'; });
 $('rate').addEventListener('input', () => { $('full-speed').checked = Number($('rate').value) === 0; });
 $('choose-folder').onclick = async () => {

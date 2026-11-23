@@ -14,7 +14,7 @@ if '--max-resources' in sys.argv:
 from .engine import search
 from .report import write_reports
 from .range_engine import search_range, validate_range
-from .source import QLOGO_ENDPOINT, SourceConfig, cache_batch
+from .source import QLOGO_ENDPOINT, QLOGO_SOURCE_NAMES, SourceConfig, cache_batch
 from .cache_lock import CacheLease
 
 
@@ -128,7 +128,7 @@ def main() -> int:
             endpoint = args.endpoint or QLOGO_ENDPOINT
             rate = args.rate if args.rate is not None else (0 if args.full_speed else 2)
             # Validate all network options before changing the active cache batch.
-            source_name = args.source_name or ('QQ头像接口（用户指定）' if endpoint == QLOGO_ENDPOINT else '获授权测试接口')
+            source_name = args.source_name or QLOGO_SOURCE_NAMES.get(endpoint, '获授权测试接口')
             SourceConfig(endpoint, args.source_revision or 'validation', name=source_name, token_env=args.token_env,
                          timeout=args.timeout, retries=args.retries, rate=rate)
             revision = args.source_revision or cache_batch(args.state_dir, endpoint, args.token_env, refresh=args.refresh_source)
