@@ -218,6 +218,7 @@ async function poll() {
 async function loadJob(key, retry = false) {
   try {
     const params = await api('load', {key}); applyParams(params);
+    lastSyncedJob = current.job_key || '';
     $('retry-errors').checked = retry; if (retry) $('advanced').open = true;
     showPage('work');
     message(retry ? '已载入原任务，开始后会重新尝试失败项。' : '已载入原目标、范围和批次。点击“开始比对”继续，已处理项会自动跳过。');
@@ -237,7 +238,9 @@ async function loadHistory() {
       const item = node('article', undefined, 'history-item');
       const top = node('div', undefined, 'history-top'), title = node('div');
       title.append(node('h2', job.target_name));
-      title.append(node('p', (job.requested_range ? job.requested_range.join(' — ') + ' · ' : '本地/旧版任务 · ') + new Date(job.updated * 1000).toLocaleString('zh-CN'), 'history-meta'));
+      const range = job.requested_range ? job.requested_range.join(' — ') : '本地/旧版任务';
+      const metadata = [range, job.source_name, new Date(job.updated * 1000).toLocaleString('zh-CN')];
+      title.append(node('p', metadata.filter(Boolean).join(' · '), 'history-meta'));
       top.append(title, node('span', job.retention === 'compact' ? (job.capture_source ? '图源清单' : '省空间') : job.retention === 'local' ? '本地文件夹' : '完整保留', 'badge neutral'));
       item.append(top);
       const stats = node('div', undefined, 'history-stats');
