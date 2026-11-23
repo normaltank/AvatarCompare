@@ -61,6 +61,7 @@ def job_info(db,run_id,*,max_ranges=20):
     compact=db.execute('SELECT scope FROM compact_jobs WHERE run_id=?',(run_id,)).fetchone() if table_exists(db,'compact_jobs') else None
     if compact:
         scope=compact[0];start,end=info['requested_range']
+        info['capture_source'] = spec['retention'] == 'compact-source'
         processed=db.execute('SELECT coalesce(sum(min(hi,?)-max(lo,?)+1),0) FROM compact_done WHERE scope=? AND hi>=? AND lo<=?',
                              (end,start,scope,start,end)).fetchone()[0]
         errors=db.execute('SELECT count(*) FROM compact_errors WHERE scope=? AND identifier BETWEEN ? AND ?',(scope,start,end)).fetchone()[0]
@@ -123,14 +124,15 @@ def main():
                 requested=job['requested_range']
                 bounds=f'{requested[0]}–{requested[1]}（含两端）' if requested else '旧版未保存请求边界；不以最大编号推断'
                 fingerprint=' ['+job['query_digest'][:12]+']' if job.get('query_digest') else ''
-                print(f"  {job['run_id']} | {Path(job['target']).name}{fingerprint} | {job['retention']} | 上次状态 {job['last_status']}")
+                retention = '省空间 + 保留图源清单' if job.get('capture_source') else job['retention']
+                print(f"  {job['run_id']} | {Path(job['target']).name}{fingerprint} | {retention} | 上次状态 {job['last_status']}")
                 if job['retention']=='local':print('    本地文件夹任务，不使用账号范围');continue
                 print(f"    请求范围：{bounds}；当前已处理 {job['processed']}，失败 {job['errors']}")
                 processed=job.get('processed_ranges')
                 print(f"    已处理区间（含失败）：{processed if processed is not None else '逐项记录；未计算连续区间摘要'}")
                 if job['retention']=='compact':
                     print(f"    成功比对区间：{job['successful_ranges']}；失败编号：{job['failed_identifiers']}")
-                    print(f"    有匹配证据 {job['consistent']} 项；候选/复核记录 {job['retained_records']} 项；未命中已丢弃 {job['discarded_unmatched']} 项")
+                    print(f"    有匹配证据 {job['consistent']} 项；候选/复核记录 {job['retained_records']} 项；已丢弃的未命中比对记录 {job['discarded_unmatched']} 项")
                     if job['ranges_truncated'] or job['errors_truncated']:print('    以上为截断预览；完整区间/错误请用ledger导出')
         return 0
     except (OSError,sqlite3.Error,ValueError) as error:

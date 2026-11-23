@@ -51,6 +51,7 @@ def export_compact(state_dir,run_id,output,*,images=False):
             for _,row in error_rows(db,scope,start,end):stream.write(json.dumps(row,ensure_ascii=False)+'\n')
         info.update(complete_per_id_records=False,originals='retained matches/review only',processed_ranges_file=paths['progress'].name,
                     errors_file=paths['errors'].name,retained_records_file=paths['jsonl'].name,
-                    note='未命中原图、特征及完整逐项指标未保存；进度区间包含失败，成功比对须扣除错误记录。')
+                    note='导出包含保留的候选和复核记录。图源清单中的原图留在本机缓存。'
+                         '进度区间包含失败，成功比对须扣除错误记录。')
         paths['manifest'].write_text(json.dumps(info,ensure_ascii=False,indent=2),encoding='utf-8')
     return paths

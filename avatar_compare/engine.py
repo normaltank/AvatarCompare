@@ -144,7 +144,7 @@ class Store:
     def raw_bytes(self, acquisition):
         if acquisition.get('storage') == 'sqlite':
             row = self.db().execute('SELECT payload FROM raw_images WHERE digest=?', (acquisition['digest'],)).fetchone()
-            data = bytes(row['payload']) if row else None
+            data = row['payload'] if row and isinstance(row['payload'], bytes) else None
         else:
             try:
                 data = read_bytes(Path(acquisition['path']))

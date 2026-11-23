@@ -9,6 +9,11 @@ import threading
 
 from .source import HttpSource, FetchFailure
 
+RAW_IMAGE_UPSERT = (
+    "INSERT INTO raw_images VALUES(?,?) ON CONFLICT(digest) "
+    "DO UPDATE SET payload=excluded.payload WHERE raw_images.payload IS NOT excluded.payload"
+)
+
 
 class ByteBudget:
     def __init__(self, limit):
@@ -62,22 +67,40 @@ class Packet:
     lease: Lease | None
     cached: bool = False
     acquisition: dict | None = None
+    from_catalog: bool = False
 
     def release(self):
         if self.lease:
             self.lease.release()
 
 
-def cached_packet(store, source_key, identifier, budget, cancel, max_bytes):
-    record = store.db().execute('SELECT payload FROM acquisitions WHERE source=? AND identifier=?', (source_key,str(identifier))).fetchone()
-    if not record:
-        return None
-    acquisition = json.loads(record['payload'])
+def cached_packet(store, source_key, identifier, budget, cancel, max_bytes, *, source_catalog=False):
+    db = store.db()
+    saved = db.execute(
+        'SELECT digest,fetched_at FROM source_catalog WHERE source=? AND identifier=?',
+        (source_key, identifier),
+    ).fetchone() if source_catalog else None
+    if saved:
+        acquisition = {
+            'digest': saved['digest'], 'storage': 'sqlite', 'path': '', 'error': None,
+            'fetch': {'attempts': 0, 'http_status': 200, 'error_code': None, 'events': [],
+                      'fetch_ms': 0, 'fetched_at': saved['fetched_at']},
+        }
+    else:
+        record = db.execute('SELECT payload FROM acquisitions WHERE source=? AND identifier=?', (source_key,str(identifier))).fetchone()
+        if not record:
+            return None
+        acquisition = json.loads(record['payload'])
     if acquisition['error']:
         return Packet(identifier,None,acquisition['fetch'],None,True,acquisition)
     if acquisition.get('storage') == 'sqlite':
-        record = store.db().execute('SELECT length(payload) AS size FROM raw_images WHERE digest=?', (acquisition['digest'],)).fetchone()
-        size = record['size'] if record else max_bytes+1
+        record = db.execute(
+            "SELECT length(payload) AS size FROM raw_images WHERE digest=? AND typeof(payload)='blob'",
+            (acquisition['digest'],),
+        ).fetchone()
+        if record is None:
+            return None
+        size = record['size']
     else:
         from pathlib import Path
         try:
@@ -90,7 +113,7 @@ def cached_packet(store, source_key, identifier, budget, cancel, max_bytes):
     try:
         data = store.raw_bytes(acquisition)
         if data is not None:
-            return Packet(identifier,data,acquisition['fetch'],lease,True,acquisition)
+            return Packet(identifier,data,acquisition['fetch'],lease,True,acquisition,from_catalog=saved is not None)
     except BaseException:
         lease.release()
         raise
@@ -125,11 +148,15 @@ class BudgetedSource(HttpSource):
 
 
 class ThreadTransfers:
-    def __init__(self, source, workers, store):
+    def __init__(self, source, workers, store, *, compact=False):
         self.source = source
         self.store, self.budget, self.cancel = store, source.budget, source.cancel
         # The staged scan schedules each identifier once under the cache lease.
-        self.has_prior_acquisitions = store.db().execute(
+        db = store.db()
+        self.source_catalog = compact and db.execute(
+            'SELECT 1 FROM source_catalog WHERE source=? LIMIT 1', (source.key,)
+        ).fetchone() is not None
+        self.has_prior_acquisitions = self.source_catalog or db.execute(
             'SELECT 1 FROM acquisitions WHERE source=? LIMIT 1', (source.key,)
         ).fetchone() is not None
         self.pool = ThreadPoolExecutor(max_workers=workers,thread_name_prefix='avatar-download')
@@ -141,7 +168,8 @@ class ThreadTransfers:
         if self.has_prior_acquisitions:
             try:
                 cached = cached_packet(
-                    self.store, self.source.key, identifier, self.budget, self.cancel, self.source.config.max_bytes
+                    self.store, self.source.key, identifier, self.budget, self.cancel, self.source.config.max_bytes,
+                    source_catalog=self.source_catalog,
                 )
             except FetchFailure as error:
                 if error.code != 'cancelled':

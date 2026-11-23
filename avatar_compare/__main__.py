@@ -41,6 +41,7 @@ def main() -> int:
     parser.add_argument('--timeout', type=float, default=10, help='网络读写超时秒数，默认10')
     parser.add_argument('--retries', type=int, default=2, help='失败后的额外重试次数，默认2')
     parser.add_argument('--retry-errors', action='store_true', help='同一任务只重试失败编号')
+    parser.add_argument('--remember-source', action='store_true', help='在省空间模式下保存编号、指纹和去重原图，供同批次换目标复用')
     parser.add_argument('--state-dir', type=Path, help='任务库目录；默认.state，省空间模式默认.state-compact')
     parser.add_argument('--output', type=Path, default=Path(__file__).resolve().parents[1]/'outputs')
     parser.add_argument('--workers', type=int, choices=range(1, max(4, min(os.cpu_count() or 1, 256))+1), help='范围计算并行数，普通默认2，全速最多8，全部资源默认逻辑CPU数')
@@ -103,6 +104,8 @@ def main() -> int:
         parser.error('--share-computations 仅用于staged范围流水线，不能与legacy组合')
     if args.compact and (not range_mode or args.pipeline=='legacy'):
         parser.error('--compact 仅用于staged范围流水线，不能与legacy组合')
+    if args.remember_source and not args.compact:
+        parser.error('--remember-source 需要 --compact')
     if args.buffer_mib < 32:
         parser.error('--buffer-mib 至少为32，以容纳单响应上限')
     if args.refresh_source and args.source_revision:
@@ -145,6 +148,7 @@ def main() -> int:
                 extra['buffer_bytes'] = args.buffer_mib*1024*1024
                 extra['share_computations'] = args.share_computations
                 extra['compact'] = args.compact
+                extra['capture_source'] = args.remember_source
             result = route(args.target, args.start, args.end, args.state_dir, config, workers=args.workers,
                                   progress=progress, retry_errors=args.retry_errors, download_workers=downloads,
                                   stream_results=args.full_speed, top_limit=max(1, min(args.limit, 100)),

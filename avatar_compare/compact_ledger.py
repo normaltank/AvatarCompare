@@ -6,13 +6,14 @@ import json
 import time
 
 from .ledger import consistent
+from .pipeline_io import RAW_IMAGE_UPSERT
 from .range_engine import range_rank_key
 
 MAX_ID=2**63-1
 REVIEW_LIMIT=100
 
 
-def schema(db):
+def schema(db, *, capture_source=False):
     db.executescript('''
       CREATE TABLE IF NOT EXISTS storage_profile(id INTEGER PRIMARY KEY CHECK(id=1),profile TEXT);
       INSERT OR IGNORE INTO storage_profile VALUES(1,'compact-v1');
@@ -26,7 +27,21 @@ def schema(db):
       CREATE INDEX IF NOT EXISTS compact_rank ON compact_candidates(scope,rank_group,rank_inliers,rank_phash,rank_ssim,identifier);
       CREATE INDEX IF NOT EXISTS compact_digest ON compact_candidates(digest);
       CREATE INDEX IF NOT EXISTS compact_matches ON compact_candidates(scope,strong,identifier);
+      CREATE TABLE IF NOT EXISTS source_catalog(
+          source TEXT, identifier INTEGER, digest TEXT NOT NULL, fetched_at REAL,
+          PRIMARY KEY(source,identifier)
+      ) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS source_catalog_digest ON source_catalog(digest);
     ''')
+    if capture_source or db.execute('SELECT 1 FROM source_catalog LIMIT 1').fetchone():
+        # Older compact scans can open this database and run their original cleanup.
+        db.executescript('''
+            CREATE TRIGGER IF NOT EXISTS protect_catalog_raw_images BEFORE DELETE ON raw_images
+            WHEN EXISTS(SELECT 1 FROM source_catalog WHERE digest=OLD.digest)
+            BEGIN
+                SELECT RAISE(IGNORE);
+            END;
+        ''')
 
 
 def add_done(db,scope,lo,hi):
@@ -59,11 +74,14 @@ def blocks(numbers):
 
 
 class CompactLedger:
-    def __init__(self,db,writer,run_id,query_digest,source,algorithm,start,end):
+    def __init__(self,db,writer,run_id,query_digest,source,algorithm,start,end,*,capture_source=False):
         self.db,self.writer,self.run_id=db,writer,run_id
         self.query_digest,self.source,self.algorithm=query_digest,source,algorithm
         self.start,self.end=start,end
-        self.scope=hashlib.sha256(json.dumps(['compact-v1',query_digest,source,algorithm]).encode()).hexdigest()[:24]
+        self.capture_source = capture_source
+        self.has_catalog = db.execute('SELECT 1 FROM source_catalog WHERE source=? LIMIT 1',(source,)).fetchone() is not None
+        scope_type = 'compact-source-v1' if capture_source else 'compact-v1'
+        self.scope=hashlib.sha256(json.dumps([scope_type,query_digest,source,algorithm]).encode()).hexdigest()[:24]
         with db:
             db.execute('INSERT OR IGNORE INTO compact_scopes VALUES(?,?,?,?,?)',
                        (self.scope,query_digest,source,algorithm,time.time()))
@@ -136,8 +154,29 @@ class CompactLedger:
         for identifier,_ in removed:
             db.execute('DELETE FROM compact_candidates WHERE scope=? AND identifier=?',(self.scope,identifier))
         writes=set()
+        obsolete_digests = set()
         for item in fresh:
             row=item.row;identifier=int(row['identifier'])
+            packet = item.packet
+            catalog_write = not packet.from_catalog and (self.capture_source or self.has_catalog and not packet.cached)
+            if catalog_write and row['metrics'] and packet.data is not None:
+                previous = None
+                if self.has_catalog:
+                    previous = db.execute(
+                        'SELECT digest FROM source_catalog WHERE source=? AND identifier=?', (self.source,identifier)
+                    ).fetchone()
+                if self.capture_source or previous:
+                    digest = row['digest']
+                    raw_key = (RAW_IMAGE_UPSERT,digest)
+                    if raw_key not in writes:
+                        db.execute(RAW_IMAGE_UPSERT,(digest,packet.data))
+                        writes.add(raw_key)
+                    db.execute('''INSERT INTO source_catalog VALUES(?,?,?,?)
+                        ON CONFLICT(source,identifier) DO UPDATE SET digest=excluded.digest,fetched_at=excluded.fetched_at
+                        WHERE source_catalog.digest IS NOT excluded.digest''',
+                        (self.source,identifier,digest,row['fetch'].get('fetched_at')))
+                    if previous and previous[0] != digest:
+                        obsolete_digests.add(previous[0])
             if row['error']:
                 row.update(raw_retained=False,asset_kind='discarded',retention_role='error')
                 db.execute('INSERT OR REPLACE INTO compact_errors VALUES(?,?,?,?)',
@@ -158,7 +197,14 @@ class CompactLedger:
                     (self.scope,identifier,row['digest'],json.dumps(row),*rank[:4],strong))
         for lo,hi in blocks(int(item.row['identifier']) for item in fresh):add_done(db,self.scope,lo,hi)
         self.prune(db,removed)
+        for digest in obsolete_digests:
+            self.remove_unused_raw(db,digest)
         return changed
+
+    @staticmethod
+    def remove_unused_raw(db,digest):
+        db.execute('''DELETE FROM raw_images WHERE digest=?
+            AND NOT EXISTS(SELECT 1 FROM compact_candidates WHERE digest=?)''',(digest,digest))
 
     def prune(self,db,removed):
         for identifier,_ in removed:
@@ -167,7 +213,7 @@ class CompactLedger:
                 db.execute('DELETE FROM acquisitions WHERE source=? AND identifier=?',(self.source,str(identifier)))
         for digest in {digest for _,digest in removed}:
             if not db.execute('SELECT 1 FROM compact_candidates WHERE digest=? LIMIT 1',(digest,)).fetchone():
-                db.execute('DELETE FROM raw_images WHERE digest=?',(digest,))
+                self.remove_unused_raw(db,digest)
                 if not db.execute('SELECT 1 FROM compact_scopes WHERE query_digest=? LIMIT 1',(digest,)).fetchone():
                     db.execute('DELETE FROM features WHERE digest=?',(digest,))
             if not db.execute('''SELECT 1 FROM compact_candidates c JOIN compact_scopes s ON s.scope=c.scope

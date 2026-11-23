@@ -131,6 +131,29 @@ class GuiTests(unittest.TestCase):
             self.assertEqual(repaired['stats']['errors'], 0)
             self.assertEqual(sum(source.calls.values()) - before, 2)
 
+    def test_source_catalog_setting_survives_gui_restart(self):
+        with MockServer(self.images) as source:
+            self.controller.start(self.values(source, capture_source=True) | {"end": "1003"})
+            initial = self.wait()
+            self.assertTrue(initial["params"]["capture_source"])
+            self.assertTrue(self.controller.history()[0]["capture_source"])
+
+            (self.root / ".ui" / "jobs.json").unlink()
+            self.controller = Controller(self.root, opener=self.opened.append)
+            resumed = self.controller.load_job(initial["job_key"])
+            self.assertTrue(resumed["capture_source"])
+            self.controller.start(resumed)
+            self.assertEqual(self.wait()["stats"]["requests"], 0)
+
+            replacement = self.controller.upload(self.images[1015], "new-target.png")
+            self.controller.start(self.values(source) | {
+                "target_id": replacement["id"], "end": "1003",
+            })
+            second = self.wait()
+            self.assertFalse(second["params"]["capture_source"])
+            self.assertEqual(second["stats"]["download_cache_hits"], 3)
+            self.assertEqual(second["stats"]["requests"], 0)
+
     def test_stop_resume_and_reject_overlapping_operations(self):
         images = {identifier: self.target for identifier in range(1001, 1081)}
         with MockServer(images, delay=0.04) as source:

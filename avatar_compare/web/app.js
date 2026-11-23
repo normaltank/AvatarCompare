@@ -56,7 +56,13 @@ function updateSettings() {
   visible('custom-speed', $('speed').value === 'custom');
   $('custom-speed').querySelectorAll('input,select').forEach((input) => { input.disabled = $('speed').value !== 'custom' || $('mode').value !== 'range'; });
   $('speed-help').textContent = $('speed').value === 'maximum' ? '使用全部逻辑 CPU 和独立计算进程；是否更快取决于下载与图片复杂度。' : '并行下载、计算及写入；重复头像自动复用计算。';
-  $('retention-help').textContent = $('compact').checked ? '已处理区间和错误始终保存；另保留前 100 项供复核。换目标可能需要重新下载。' : '完整保留逐项记录与原图，方便后续复用；大范围任务会占用更多磁盘。';
+  const compact = $('compact').checked;
+  visible('capture-source-option', compact);
+  $('retention-help').textContent = compact
+    ? $('capture-source').checked
+      ? '当前目标保留候选和前 100 项复核记录。图源清单另存已成功读取的原图。'
+      : '保留已处理区间、错误和前 100 项复核记录。同批次可复用已保留的图片。'
+    : '完整保留逐项记录与原图，方便后续复用。大范围任务会占用更多磁盘。';
 }
 function applyParams(params) {
   selectedTarget = {id: params.target_id, name: params.target_name};
@@ -67,6 +73,7 @@ function applyParams(params) {
   const map = {start: 'start', end: 'end', speed: 'speed', workers: 'workers', downloads: 'downloads', backend: 'backend', rate: 'rate', timeout: 'timeout', retries: 'retries', endpoint: 'endpoint', revision: 'revision', token_env: 'token-env'};
   for (const [key, id] of Object.entries(map)) if (params[key] != null) $(id).value = params[key];
   $('compact').checked = params.retention === 'compact';
+  $('capture-source').checked = Boolean(params.capture_source);
   $('full-speed').checked = Number(params.rate || 0) === 0;
   $('refresh').checked = $('retry-errors').checked = false;
   if (params.folder_id) {
@@ -94,6 +101,7 @@ async function upload(file) {
 function formValues() {
   const values = {target_id: selectedTarget?.id, folder_id: selectedFolder?.id, mode: $('mode').value,
     start: $('start').value.trim(), end: $('end').value.trim(), retention: $('compact').checked ? 'compact' : 'all',
+    capture_source: $('compact').checked && $('capture-source').checked,
     speed: $('speed').value, workers: $('workers').value, downloads: $('downloads').value, backend: $('backend').value,
     rate: $('rate').value, timeout: $('timeout').value, retries: $('retries').value, endpoint: $('endpoint').value,
     revision: $('revision').value, token_env: $('token-env').value, refresh: $('refresh').checked, retry_errors: $('retry-errors').checked};
@@ -229,7 +237,7 @@ async function loadHistory() {
       const top = node('div', undefined, 'history-top'), title = node('div');
       title.append(node('h2', job.target_name));
       title.append(node('p', (job.requested_range ? job.requested_range.join(' — ') + ' · ' : '本地/旧版任务 · ') + new Date(job.updated * 1000).toLocaleString('zh-CN'), 'history-meta'));
-      top.append(title, node('span', job.retention === 'compact' ? '省空间' : job.retention === 'local' ? '本地文件夹' : '完整保留', 'badge neutral'));
+      top.append(title, node('span', job.retention === 'compact' ? (job.capture_source ? '图源清单' : '省空间') : job.retention === 'local' ? '本地文件夹' : '完整保留', 'badge neutral'));
       item.append(top);
       const stats = node('div', undefined, 'history-stats');
       stats.append(node('span', '已处理 ' + count(job.processed)), node('span', '成功 ' + count(job.successful)), node('span', '失败 ' + count(job.errors)));
@@ -278,7 +286,7 @@ for (const name of ['dragleave', 'drop']) $('drop-zone').addEventListener(name, 
 $('drop-zone').addEventListener('drop', (event) => upload(event.dataTransfer.files[0]));
 $('mode').addEventListener('change', updateMode);
 for (const id of ['start', 'end']) $(id).addEventListener('input', updateRange);
-for (const id of ['speed', 'compact']) $(id).addEventListener('change', updateSettings);
+for (const id of ['speed', 'compact', 'capture-source']) $(id).addEventListener('change', updateSettings);
 $('full-speed').addEventListener('change', () => { $('rate').value = $('full-speed').checked ? '0' : '2'; });
 $('rate').addEventListener('input', () => { $('full-speed').checked = Number($('rate').value) === 0; });
 $('choose-folder').onclick = async () => {

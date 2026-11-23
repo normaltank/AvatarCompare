@@ -18,7 +18,7 @@ from concurrent.futures.process import BrokenProcessPool
 
 from .engine import Store, COMPARE_VERSION
 from .ledger import RangeLedger, consistent
-from .pipeline_io import BudgetedSource, ByteBudget, ThreadTransfers
+from .pipeline_io import BudgetedSource, ByteBudget, RAW_IMAGE_UPSERT, ThreadTransfers
 from .range_engine import range_rank_key, validate_range
 from .storage_profile import require_profile,range_specs_schema,save_range_spec
 
@@ -34,9 +34,11 @@ def search_staged(target, start, end, state_dir, config, *, workers=2, download_
                   cancel=None, progress=None, retry_errors=False, top_limit=100,
                   compute_backend='thread', buffer_bytes=256*1024*1024,
                   worker_observer=None, share_computations=False, compact=False,
-                  on_top_matches=None, **compatibility):
+                  on_top_matches=None, capture_source=False, **compatibility):
     """Scan a range and optionally publish the top strong matches after commit."""
     validate_range(start,end)
+    if capture_source and not compact:
+        raise ValueError('保留图源清单需要启用省空间模式')
     downloads = workers if download_workers is None else download_workers
     if not 1 <= workers <= max(4,min(os.cpu_count() or 1,256)) or not 1 <= downloads <= 256:
         raise ValueError('计算或下载并行数超出本机允许范围')
@@ -69,7 +71,7 @@ def search_staged(target, start, end, state_dir, config, *, workers=2, download_
         db = store.db()
         if compact:
             from .compact_ledger import schema,CompactLedger
-            schema(db)
+            schema(db, capture_source=capture_source)
         range_specs_schema(db)
         query, query_cache = store.get(target)
         if share_computations:
@@ -77,12 +79,15 @@ def search_staged(target, start, end, state_dir, config, *, workers=2, download_
             sharing = SharedComparisons(lambda query,data:store.prepare_bytes(query,data,retain_replay=compact))
         source = BudgetedSource(config, budget, cancel)
         source_key = source.key
-        run_id = hashlib.sha256(json.dumps(['range-compact-v1' if compact else 'range-v3-staged',COMPARE_VERSION,query.digest,source_key,start,end]).encode()).hexdigest()[:24]
-        ledger = CompactLedger(db,store.writer,run_id,query.digest,source_key,COMPARE_VERSION,start,end) if compact else None
+        retention = 'compact-source' if capture_source else 'compact' if compact else 'all'
+        run_type = 'range-compact-source-v1' if capture_source else 'range-compact-v1' if compact else 'range-v3-staged'
+        run_id = hashlib.sha256(json.dumps([run_type,COMPARE_VERSION,query.digest,source_key,start,end]).encode()).hexdigest()[:24]
+        ledger = CompactLedger(db,store.writer,run_id,query.digest,source_key,COMPARE_VERSION,start,end,
+                               capture_source=capture_source) if compact else None
         with db:
             db.execute('INSERT OR REPLACE INTO runs VALUES(?,?,?,?,?,?)',
                        (run_id,str(target),source_key,'running',end-start+1,time.time()))
-            save_range_spec(db,run_id,query.digest,source_key,COMPARE_VERSION,start,end,'compact' if compact else 'all',config)
+            save_range_spec(db,run_id,query.digest,source_key,COMPARE_VERSION,start,end,retention,config)
         if not compact:ledger = RangeLedger(db,run_id)
         if retry_errors:
             ledger.retry_errors(source_key)
@@ -110,7 +115,7 @@ def search_staged(target, start, end, state_dir, config, *, workers=2, download_
                 'requests':transfers.requests if transfers else 0,'buffer_reserved_bytes':budget.used})
 
         if stats['processed'] < stats['total'] and not cancel.is_set():
-            transfers = ThreadTransfers(source, downloads, store)
+            transfers = ThreadTransfers(source, downloads, store, compact=compact)
             cpu = ThreadPoolExecutor(max_workers=workers,thread_name_prefix='avatar-compute')
             if compute_backend == 'process':
                 from .parallel import extract_in_process, initialize_cpu
@@ -141,8 +146,7 @@ def search_staged(target, start, end, state_dir, config, *, workers=2, download_
                 storage = packet.acquisition.get('storage','file') if packet.cached and packet.acquisition else 'sqlite'
                 path = packet.acquisition.get('path','') if storage == 'file' and packet.acquisition else ''
                 if not packet.cached or compact:
-                    statements.append(('''INSERT INTO raw_images VALUES(?,?) ON CONFLICT(digest)
-                        DO UPDATE SET payload=excluded.payload WHERE raw_images.payload IS NOT excluded.payload''',(digest,data)))
+                    statements.append((RAW_IMAGE_UPSERT,(digest,data)))
                 row.update(path=path,asset_kind=storage,raw_size=len(data),digest=digest)
             else:
                 storage,path = 'sqlite',''
@@ -292,7 +296,7 @@ def search_staged(target, start, end, state_dir, config, *, workers=2, download_
             'algorithm':COMPARE_VERSION,'source':{'name':config.name,'revision':config.revision,'fingerprint':source_key},
             'range':{'start':str(start),'end':str(end),'inclusive':True},'result_storage':'disk',
             'result_database':str(state_dir/'cache.sqlite3'),'pipeline':'staged',
-            'retention_mode':'compact' if compact else 'all',
+            'retention_mode':'compact' if compact else 'all','capture_source':capture_source,
             **({'scope_id':ledger.scope,'records_complete':False,'review_limit':100} if compact else {})}
     except BaseException:
         cancel.set()

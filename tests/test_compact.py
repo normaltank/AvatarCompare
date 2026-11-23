@@ -144,6 +144,73 @@ class CompactTests(unittest.TestCase):
             self.assertIn('省空间模式',html);self.assertNotIn('完整 18 项记录',html)
             self.assertEqual(len(reports['errors'].read_text(encoding='utf-8').splitlines()),2)
 
+    def test_source_catalog_captures_discarded_images_and_reuses_them_for_a_new_target(self):
+        from PIL import Image
+
+        uniform = encode(Image.new("RGB", (100, 100), "blue"))
+        identifiers = range(1001, 1129)
+        with MockServer(dict.fromkeys(identifiers, uniform)) as server:
+            ordinary = self.run_scan(server, end=1128)
+            self.assertEqual(ordinary["stats"]["requests"], 128)
+
+            captured = self.run_scan(server, end=1128, capture_source=True)
+            self.assertEqual(captured["stats"]["resumed"], 0)
+            self.assertEqual(captured["stats"]["requests"], 28)
+            self.assertTrue(inspect(self.state, run_id=captured["run_id"])[0]["capture_source"])
+            with closing(sqlite3.connect(self.state / "cache.sqlite3")) as db:
+                self.assertEqual(db.execute("SELECT count(*) FROM source_catalog").fetchone()[0], 128)
+                self.assertEqual(db.execute("SELECT count(*) FROM raw_images").fetchone()[0], 1)
+
+            self.target.write_bytes(self.images[1015])
+            replayed = self.run_scan(server, end=1128)
+            self.assertEqual(replayed["stats"]["resumed"], 0)
+            self.assertEqual(replayed["stats"]["download_cache_hits"], 128)
+            self.assertEqual(replayed["stats"]["requests"], 0)
+
+    def test_source_catalog_repairs_bad_bytes_and_stays_within_its_batch(self):
+        with MockServer(self.images) as server:
+            self.run_scan(server, start=1001, end=1001, capture_source=True)
+            expected = hashlib.sha256(self.images[1001]).hexdigest()
+            for seed, payload in enumerate((b"corrupt", "unexpected text", None)):
+                with self.subTest(payload=payload):
+                    with closing(sqlite3.connect(self.state / "cache.sqlite3")) as db, db:
+                        db.execute("UPDATE raw_images SET payload=? WHERE digest=?", (payload, expected))
+                    self.target.write_bytes(encode(synthetic_picture(seed)))
+                    repaired = self.run_scan(server, start=1001, end=1001)
+                    self.assertEqual(repaired["stats"]["requests"], 1)
+                    with closing(sqlite3.connect(self.state / "cache.sqlite3")) as db:
+                        stored, = db.execute("SELECT payload FROM raw_images WHERE digest=?", (expected,)).fetchone()
+                    self.assertEqual(stored, self.images[1001])
+
+            fresh = SourceConfig(server.url, "fresh", rate=0, retries=0, keep_alive=True)
+            refreshed = self.run_scan(server, start=1001, end=1001, config=fresh)
+            self.assertEqual(refreshed["stats"]["requests"], 1)
+            self.assertEqual(refreshed["stats"]["download_cache_hits"], 0)
+
+    def test_source_catalog_keeps_original_after_candidate_eviction(self):
+        from PIL import Image
+
+        def solid(color):
+            return encode(Image.new("RGB", (100, 100), color))
+
+        self.target.write_bytes(solid("white"))
+        weak = solid("black")
+        digest = hashlib.sha256(weak).hexdigest()
+        images = {1001: weak, **dict.fromkeys(range(1002, 1102), solid("#dddddd"))}
+        with MockServer(images) as server:
+            self.run_scan(server, end=1001)
+            self.run_scan(server, end=1101, capture_source=True)
+            self.run_scan(server, end=1101)
+            with closing(sqlite3.connect(self.state / "cache.sqlite3")) as db, db:
+                self.assertIsNone(db.execute("SELECT 1 FROM compact_candidates WHERE digest=?", (digest,)).fetchone())
+                # An older release issues this unguarded delete during cleanup.
+                db.execute("DELETE FROM raw_images WHERE digest=?", (digest,))
+                self.assertEqual(db.execute("SELECT payload FROM raw_images WHERE digest=?", (digest,)).fetchone()[0], weak)
+            self.target.write_bytes(solid("red"))
+            replay = self.run_scan(server, end=1001)
+            self.assertEqual(replay["stats"]["requests"], 0)
+            self.assertEqual(replay["stats"]["download_cache_hits"], 1)
+
     def test_retry_failed_point_and_preserve_adjacent_success(self):
         with MockServer(self.images,faults={1003:[503,200]}) as server:
             first=self.run_scan(server)

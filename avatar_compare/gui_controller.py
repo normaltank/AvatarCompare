@@ -176,6 +176,9 @@ class Controller:
         retention = values.get('retention', 'compact')
         if retention not in {'all', 'compact'}:
             raise ValueError('请选择保留方式')
+        capture_source = bool(values.get('capture_source', False))
+        if capture_source and retention != 'compact':
+            raise ValueError('保留图源清单需要启用省空间模式')
         speed = values.get('speed', 'efficient')
         cpus = min(os.cpu_count() or 1, 256)
         if speed == 'efficient':
@@ -199,7 +202,7 @@ class Controller:
         refresh = bool(values.get('refresh', False))
         if refresh and revision:
             raise ValueError('重新获取和指定批次不能同时使用；清空批次后重试')
-        params.update(start=str(start), end=str(end), retention=retention, speed=speed,
+        params.update(start=str(start), end=str(end), retention=retention, speed=speed, capture_source=capture_source,
                       workers=workers, downloads=downloads, backend=backend, endpoint=endpoint,
                       revision=revision, rate=rate, timeout=timeout, retries=retries, token_env=token_env,
                       refresh=refresh, retry_errors=bool(values.get('retry_errors', False)))
@@ -282,7 +285,8 @@ class Controller:
                                        workers=params['workers'], download_workers=params['downloads'],
                                        compute_backend=params['backend'], share_computations=True, compact=compact,
                                        cancel=self.cancel, progress=self._progress, retry_errors=params['retry_errors'],
-                                       top_limit=20, on_top_matches=publish_candidates)
+                                       top_limit=20, on_top_matches=publish_candidates,
+                                       capture_source=params.get('capture_source', False))
             with self.guard:
                 self.current.update(status='saving', message='正在生成候选对照报告…')
             reports = write_reports(result, output, limit=20)
@@ -362,6 +366,8 @@ class Controller:
             params = dict(mode='range', start=str(bounds[0]), end=str(bounds[1]), retention=row['retention'],
                           speed='efficient', endpoint=QLOGO_ENDPOINT, revision=revision, rate=0, timeout=10, retries=2,
                           refresh=False, token_env=None, retry_errors=False, target=row['target'])
+        if params.get('mode') == 'range':
+            params['capture_source'] = bool(row.get('capture_source'))
         if not check:
             return params if Path(params['target']).is_file() else None
         path = Path(params['target'])
